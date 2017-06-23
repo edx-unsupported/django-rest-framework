@@ -17,7 +17,7 @@ By default, the API will return the format specified by the headers, which in th
 
 ## Customizing
 
-The browsable API is built with [Twitter's Bootstrap][bootstrap] (v 2.1.1), making it easy to customize the look-and-feel.
+The browsable API is built with [Twitter's Bootstrap][bootstrap] (v 3.3.5), making it easy to customize the look-and-feel.
 
 To customize the default style, create a template called `rest_framework/api.html` that extends from `rest_framework/base.html`.  For example:
 
@@ -146,8 +146,6 @@ An alternative, but more complex option would be to replace the input with an au
 
 There are [a variety of packages for autocomplete widgets][autocomplete-packages], such as [django-autocomplete-light][django-autocomplete-light], that you may want to refer to. Note that you will not be able to simply include these components as standard widgets, but will need to write the HTML template explicitly. This is because REST framework 3.0 no longer supports the `widget` keyword argument since it now uses templated HTML generation.
 
-Better support for autocomplete inputs is planned in future versions.
-
 ---
 
 [cite]: http://en.wikiquote.org/wiki/Alfred_North_Whitehead
@@ -163,4 +161,4 @@ Better support for autocomplete inputs is planned in future versions.
 [bcomponentsnav]: http://getbootstrap.com/2.3.2/components.html#navbar
 [autocomplete-packages]: https://www.djangopackages.com/grids/g/auto-complete/
 [django-autocomplete-light]: https://github.com/yourlabs/django-autocomplete-light
-[django-autocomplete-light-install]: http://django-autocomplete-light.readthedocs.org/en/latest/#install
+[django-autocomplete-light-install]: https://django-autocomplete-light.readthedocs.io/en/master/install.html

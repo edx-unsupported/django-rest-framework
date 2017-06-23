@@ -6,16 +6,32 @@ versions of Django/Python, and compatibility wrappers around optional packages.
 # flake8: noqa
 from __future__ import unicode_literals
 
+import inspect
+
 import django
+from django.apps import apps
 from django.conf import settings
-from django.db import connection, transaction
+from django.core.exceptions import ImproperlyConfigured
+from django.db import connection, models, transaction
+from django.template import Context, RequestContext, Template
 from django.utils import six
 from django.views.generic import View
 
+
 try:
-    import importlib  # Available in Python 3.1+
+    from django.urls import (
+        NoReverseMatch, RegexURLPattern, RegexURLResolver, ResolverMatch, Resolver404, get_script_prefix, reverse, reverse_lazy, resolve
+    )
 except ImportError:
-    from django.utils import importlib  # Will be removed in Django 1.9
+    from django.core.urlresolvers import (  # Will be removed in Django 2.0
+        NoReverseMatch, RegexURLPattern, RegexURLResolver, ResolverMatch, Resolver404, get_script_prefix, reverse, reverse_lazy, resolve
+    )
+
+
+try:
+    import urlparse  # Python 2.x
+except ImportError:
+    import urllib.parse as urlparse
 
 
 def unicode_repr(instance):
@@ -57,14 +73,82 @@ def distinct(queryset, base):
     return queryset.distinct()
 
 
-# OrderedDict only available in Python 2.7.
-# This will always be the case in Django 1.7 and above, as these versions
-# no longer support Python 2.6.
-# For Django <= 1.6 and Python 2.6 fall back to SortedDict.
-try:
-    from collections import OrderedDict
-except ImportError:
-    from django.utils.datastructures import SortedDict as OrderedDict
+# Obtaining manager instances and names from model options differs after 1.10.
+def get_names_and_managers(options):
+    if django.VERSION >= (1, 10):
+        # Django 1.10 onwards provides a `.managers` property on the Options.
+        return [
+            (manager.name, manager)
+            for manager
+            in options.managers
+        ]
+    # For Django 1.8 and 1.9, use the three-tuple information provided
+    # by .concrete_managers and .abstract_managers
+    return [
+        (manager_info[1], manager_info[2])
+        for manager_info
+        in (options.concrete_managers + options.abstract_managers)
+    ]
+
+
+# field.rel is deprecated from 1.9 onwards
+def get_remote_field(field, **kwargs):
+    if 'default' in kwargs:
+        if django.VERSION < (1, 9):
+            return getattr(field, 'rel', kwargs['default'])
+        return getattr(field, 'remote_field', kwargs['default'])
+
+    if django.VERSION < (1, 9):
+        return field.rel
+    return field.remote_field
+
+
+def _resolve_model(obj):
+    """
+    Resolve supplied `obj` to a Django model class.
+
+    `obj` must be a Django model class itself, or a string
+    representation of one.  Useful in situations like GH #1225 where
+    Django may not have resolved a string-based reference to a model in
+    another model's foreign key definition.
+
+    String representations should have the format:
+        'appname.ModelName'
+    """
+    if isinstance(obj, six.string_types) and len(obj.split('.')) == 2:
+        app_name, model_name = obj.split('.')
+        resolved_model = apps.get_model(app_name, model_name)
+        if resolved_model is None:
+            msg = "Django did not return a model for {0}.{1}"
+            raise ImproperlyConfigured(msg.format(app_name, model_name))
+        return resolved_model
+    elif inspect.isclass(obj) and issubclass(obj, models.Model):
+        return obj
+    raise ValueError("{0} is not a Django model".format(obj))
+
+
+def is_authenticated(user):
+    if django.VERSION < (1, 10):
+        return user.is_authenticated()
+    return user.is_authenticated
+
+
+def is_anonymous(user):
+    if django.VERSION < (1, 10):
+        return user.is_anonymous()
+    return user.is_anonymous
+
+
+def get_related_model(field):
+    if django.VERSION < (1, 9):
+        return _resolve_model(field.rel.to)
+    return field.remote_field.model
+
+
+def value_from_object(field, obj):
+    if django.VERSION < (1, 9):
+        return field._get_val_from_obj(obj)
+    return field.value_from_object(obj)
 
 
 # contrib.postgres only supported from 1.8 onwards.
@@ -74,100 +158,59 @@ except ImportError:
     postgres_fields = None
 
 
+# JSONField is only supported from 1.9 onwards
+try:
+    from django.contrib.postgres.fields import JSONField
+except ImportError:
+    JSONField = None
+
+
+# coreapi is optional (Note that uritemplate is a dependency of coreapi)
+try:
+    import coreapi
+    import uritemplate
+except (ImportError, SyntaxError):
+    # SyntaxError is possible under python 3.2
+    coreapi = None
+    uritemplate = None
+
+
+# coreschema is optional
+try:
+    import coreschema
+except ImportError:
+    coreschema = None
+
+
 # django-filter is optional
 try:
     import django_filters
 except ImportError:
     django_filters = None
 
-if django.VERSION >= (1, 6):
-    def clean_manytomany_helptext(text):
-        return text
-else:
-    # Up to version 1.5 many to many fields automatically suffix
-    # the `help_text` attribute with hardcoded text.
-    def clean_manytomany_helptext(text):
-        if text.endswith(' Hold down "Control", or "Command" on a Mac, to select more than one.'):
-            text = text[:-69]
-        return text
+
+# django-crispy-forms is optional
+try:
+    import crispy_forms
+except ImportError:
+    crispy_forms = None
+
+
+# requests is optional
+try:
+    import requests
+except ImportError:
+    requests = None
+
 
 # Django-guardian is optional. Import only if guardian is in INSTALLED_APPS
 # Fixes (#1712). We keep the try/except for the test suite.
 guardian = None
 try:
-    import guardian
-    import guardian.shortcuts  # Fixes #1624
+    if 'guardian' in settings.INSTALLED_APPS:
+        import guardian
 except ImportError:
     pass
-
-
-def get_model_name(model_cls):
-    try:
-        return model_cls._meta.model_name
-    except AttributeError:
-        # < 1.6 used module_name instead of model_name
-        return model_cls._meta.module_name
-
-
-# MinValueValidator, MaxValueValidator et al. only accept `message` in 1.8+
-if django.VERSION >= (1, 8):
-    from django.core.validators import MinValueValidator, MaxValueValidator
-    from django.core.validators import MinLengthValidator, MaxLengthValidator
-else:
-    from django.core.validators import MinValueValidator as DjangoMinValueValidator
-    from django.core.validators import MaxValueValidator as DjangoMaxValueValidator
-    from django.core.validators import MinLengthValidator as DjangoMinLengthValidator
-    from django.core.validators import MaxLengthValidator as DjangoMaxLengthValidator
-
-
-    class MinValueValidator(DjangoMinValueValidator):
-        def __init__(self, *args, **kwargs):
-            self.message = kwargs.pop('message', self.message)
-            super(MinValueValidator, self).__init__(*args, **kwargs)
-
-
-    class MaxValueValidator(DjangoMaxValueValidator):
-        def __init__(self, *args, **kwargs):
-            self.message = kwargs.pop('message', self.message)
-            super(MaxValueValidator, self).__init__(*args, **kwargs)
-
-
-    class MinLengthValidator(DjangoMinLengthValidator):
-        def __init__(self, *args, **kwargs):
-            self.message = kwargs.pop('message', self.message)
-            super(MinLengthValidator, self).__init__(*args, **kwargs)
-
-
-    class MaxLengthValidator(DjangoMaxLengthValidator):
-        def __init__(self, *args, **kwargs):
-            self.message = kwargs.pop('message', self.message)
-            super(MaxLengthValidator, self).__init__(*args, **kwargs)
-
-
-# URLValidator only accepts `message` in 1.6+
-if django.VERSION >= (1, 6):
-    from django.core.validators import URLValidator
-else:
-    from django.core.validators import URLValidator as DjangoURLValidator
-
-
-    class URLValidator(DjangoURLValidator):
-        def __init__(self, *args, **kwargs):
-            self.message = kwargs.pop('message', self.message)
-            super(URLValidator, self).__init__(*args, **kwargs)
-
-
-# EmailValidator requires explicit regex prior to 1.6+
-if django.VERSION >= (1, 6):
-    from django.core.validators import EmailValidator
-else:
-    from django.core.validators import EmailValidator as DjangoEmailValidator
-    from django.core.validators import email_re
-
-
-    class EmailValidator(DjangoEmailValidator):
-        def __init__(self, *args, **kwargs):
-            super(EmailValidator, self).__init__(email_re, *args, **kwargs)
 
 
 # PATCH method is not implemented by Django
@@ -179,19 +222,65 @@ if 'patch' not in View.http_method_names:
 try:
     import markdown
 
+    if markdown.version <= '2.2':
+        HEADERID_EXT_PATH = 'headerid'
+        LEVEL_PARAM = 'level'
+    elif markdown.version < '2.6':
+        HEADERID_EXT_PATH = 'markdown.extensions.headerid'
+        LEVEL_PARAM = 'level'
+    else:
+        HEADERID_EXT_PATH = 'markdown.extensions.toc'
+        LEVEL_PARAM = 'baselevel'
 
     def apply_markdown(text):
         """
         Simple wrapper around :func:`markdown.markdown` to set the base level
         of '#' style headers to <h2>.
         """
-
-        extensions = ['headerid(level=2)']
-        safe_mode = False
-        md = markdown.Markdown(extensions=extensions, safe_mode=safe_mode)
+        extensions = [HEADERID_EXT_PATH]
+        extension_configs = {
+            HEADERID_EXT_PATH: {
+                LEVEL_PARAM: '2'
+            }
+        }
+        md = markdown.Markdown(
+            extensions=extensions, extension_configs=extension_configs
+        )
         return md.convert(text)
 except ImportError:
     apply_markdown = None
+    markdown = None
+
+
+try:
+    import pygments
+    from pygments.lexers import get_lexer_by_name
+    from pygments.formatters import HtmlFormatter
+
+    def pygments_highlight(text, lang, style):
+        lexer = get_lexer_by_name(lang, stripall=False)
+        formatter = HtmlFormatter(nowrap=True, style=style)
+        return pygments.highlight(text, lexer, formatter)
+
+    def pygments_css(style):
+        formatter = HtmlFormatter(style=style)
+        return formatter.get_style_defs('.highlight')
+
+except ImportError:
+    pygments = None
+
+    def pygments_highlight(text, lang, style):
+        return text
+
+    def pygments_css(style):
+        return None
+
+
+try:
+    import pytz
+    from pytz.exceptions import InvalidTimeError
+except ImportError:
+    InvalidTimeError = Exception
 
 
 # `separators` argument to `json.dumps()` differs between 2.x and 3.x
@@ -205,12 +294,11 @@ else:
     LONG_SEPARATORS = (b', ', b': ')
     INDENT_SEPARATORS = (b',', b': ')
 
-if django.VERSION >= (1, 8):
-    from django.db.models import DurationField
-    from django.utils.dateparse import parse_duration
-    from django.utils.duration import duration_string
-else:
-    DurationField = duration_string = parse_duration = None
+try:
+    # DecimalValidator is unavailable in Django < 1.9
+    from django.core.validators import DecimalValidator
+except ImportError:
+    DecimalValidator = None
 
 
 def set_rollback():
@@ -228,3 +316,41 @@ def set_rollback():
     else:
         # transaction not managed
         pass
+
+
+def template_render(template, context=None, request=None):
+    """
+    Passing Context or RequestContext to Template.render is deprecated in 1.9+,
+    see https://github.com/django/django/pull/3883 and
+    https://github.com/django/django/blob/1.9/django/template/backends/django.py#L82-L84
+
+    :param template: Template instance
+    :param context: dict
+    :param request: Request instance
+    :return: rendered template as SafeText instance
+    """
+    if isinstance(template, Template):
+        if request:
+            context = RequestContext(request, context)
+        else:
+            context = Context(context)
+        return template.render(context)
+    # backends template, e.g. django.template.backends.django.Template
+    else:
+        return template.render(context, request=request)
+
+
+def set_many(instance, field, value):
+    if django.VERSION < (1, 10):
+        setattr(instance, field, value)
+    else:
+        field = getattr(instance, field)
+        field.set(value)
+
+
+def include(module, namespace=None, app_name=None):
+    from django.conf.urls import include
+    if django.VERSION < (1,9):
+        return include(module, namespace, app_name)
+    else:
+        return include((module, app_name), namespace)

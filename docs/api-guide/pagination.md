@@ -17,13 +17,18 @@ The built-in styles currently all use links included as part of the content of t
 
 Pagination is only performed automatically if you're using the generic views or viewsets. If you're using a regular `APIView`, you'll need to call into the pagination API yourself to ensure you return a paginated response. See the source code for the `mixins.ListModelMixin` and `generics.GenericAPIView` classes for an example.
 
+Pagination can be turned off by setting the pagination class to `None`.
+
 ## Setting the pagination style
 
-The default pagination style may be set globally, using the `DEFAULT_PAGINATION_CLASS` settings key. For example, to use the built-in limit/offset pagination, you would do:
+The default pagination style may be set globally, using the `DEFAULT_PAGINATION_CLASS` and `PAGE_SIZE` setting keys. For example, to use the built-in limit/offset pagination, you would do something like this:
 
     REST_FRAMEWORK = {
-        'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination'
+        'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.LimitOffsetPagination',
+        'PAGE_SIZE': 100
     }
+
+Note that you need to set both the pagination class, and the page size that should be used.
 
 You can also set the pagination class on an individual view by using the `pagination_class` attribute. Typically you'll want to use the same pagination style throughout your API, although you might want to vary individual aspects of the pagination, such as default or maximum page size, on a per-view basis.
 
@@ -45,14 +50,14 @@ You can then apply your new style to a view using the `.pagination_class` attrib
 
     class BillingRecordsView(generics.ListAPIView):
         queryset = Billing.objects.all()
-        serializer = BillingRecordsSerializer
+        serializer_class = BillingRecordsSerializer
         pagination_class = LargeResultsSetPagination
 
 Or apply the style globally, using the `DEFAULT_PAGINATION_CLASS` settings key. For example:
 
     REST_FRAMEWORK = {
         'DEFAULT_PAGINATION_CLASS': 'apps.core.pagination.StandardResultsSetPagination'
-        }
+    }
 
 ---
 
@@ -95,6 +100,7 @@ The `PageNumberPagination` class includes a number of attributes that may be ove
 
 To set these attributes you should override the `PageNumberPagination` class, and then enable your custom pagination class as above.
 
+* `django_paginator_class` - The Django Paginator class to use. Default is `django.core.paginator.Paginator`, which should be fine for most use cases.
 * `page_size` - A numeric value indicating the page size. If set, this overrides the `PAGE_SIZE` setting. Defaults to the same value as the `PAGE_SIZE` settings key.
 * `page_query_param` - A string value indicating the name of the query parameter to use for the pagination control.
 * `page_size_query_param` - If set, this is a string value indicating the name of a query parameter that allows the client to set the page size on a per-request basis. Defaults to `None`, indicating that the client may not control the requested page size.
@@ -106,7 +112,7 @@ To set these attributes you should override the `PageNumberPagination` class, an
 
 ## LimitOffsetPagination
 
-This pagination style mirrors the syntax used when looking up multiple database records. The client includes both a "limit" and an 
+This pagination style mirrors the syntax used when looking up multiple database records. The client includes both a "limit" and an
 "offset" query parameter. The limit indicates the maximum number of items to return, and is equivalent to the `page_size` in other styles. The offset indicates the starting position of the query in relation to the complete set of unpaginated items.
 
 **Request**:
@@ -175,7 +181,7 @@ Proper usage of cursor pagination should have an ordering field that satisfies t
 * Should be a non-nullable value that can be coerced to a string.
 * The field should have a database index.
 
-Using an ordering field that does not satisfy these constraints will generally still work, but you'll be loosing some of the benefits of cursor pagination.
+Using an ordering field that does not satisfy these constraints will generally still work, but you'll be losing some of the benefits of cursor pagination.
 
 For more technical details on the implementation we use for cursor pagination, the ["Building cursors for the Disqus API"][disqus-cursor-api] blog post gives a good overview of the basic approach.
 
@@ -270,6 +276,15 @@ To have your custom pagination class be used by default, use the `DEFAULT_PAGINA
 
 API responses for list endpoints will now include a `Link` header, instead of including the pagination links as part of the body of the response, for example:
 
+## Pagination & schemas
+
+You can also make the pagination controls available to the schema autogeneration
+that REST framework provides, by implementing a `get_schema_fields()` method. This method should have the following signature:
+
+`get_schema_fields(self, view)`
+
+The method should return a list of `coreapi.Field` instances.
+
 ---
 
 ![Link Header][link-header]
@@ -309,9 +324,14 @@ The following third party packages are also available.
 
 The [`DRF-extensions` package][drf-extensions] includes a [`PaginateByMaxMixin` mixin class][paginate-by-max-mixin] that allows your API clients to specify `?page_size=max` to obtain the maximum allowed page size.
 
-[cite]: https://docs.djangoproject.com/en/dev/topics/pagination/
+## drf-proxy-pagination
+
+The [`drf-proxy-pagination` package][drf-proxy-pagination] includes a `ProxyPagination` class which allows to choose pagination class with a query parameter.
+
+[cite]: https://docs.djangoproject.com/en/stable/topics/pagination/
 [github-link-pagination]: https://developer.github.com/guides/traversing-with-pagination/
 [link-header]: ../img/link-header-pagination.png
 [drf-extensions]: http://chibisov.github.io/drf-extensions/docs/
 [paginate-by-max-mixin]: http://chibisov.github.io/drf-extensions/docs/#paginatebymaxmixin
-[disqus-cursor-api]: http://cramer.io/2011/03/08/building-cursors-for-the-disqus-api/
+[drf-proxy-pagination]: https://github.com/tuffnatty/drf-proxy-pagination
+[disqus-cursor-api]: http://cramer.io/2011/03/08/building-cursors-for-the-disqus-api
