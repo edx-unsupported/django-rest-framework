@@ -8,13 +8,13 @@ import sys
 import pytest
 
 PYTEST_ARGS = {
-    'default': ['tests', '--tb=short', '-s'],
-    'fast': ['tests', '--tb=short', '-q', '-s'],
+    'default': ['tests', '--tb=short', '-s', '-rw'],
+    'fast': ['tests', '--tb=short', '-q', '-s', '-rw'],
 }
 
 FLAKE8_ARGS = ['rest_framework', 'tests', '--ignore=E501']
 
-ISORT_ARGS = ['--recursive', '--check-only', 'rest_framework', 'tests']
+ISORT_ARGS = ['--recursive', '--check-only', '-o' 'uritemplate', '-p', 'tests', 'rest_framework', 'tests']
 
 sys.path.append(os.path.dirname(__file__))
 
@@ -93,7 +93,11 @@ if __name__ == "__main__":
         except ValueError:
             pass
         else:
-            pytest_args = ['--cov', 'rest_framework'] + pytest_args
+            pytest_args = [
+                '--cov-report',
+                'xml',
+                '--cov',
+                'rest_framework'] + pytest_args
 
         if first_arg.startswith('-'):
             # `runtests.py [flags]`

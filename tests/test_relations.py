@@ -1,7 +1,9 @@
 import uuid
 
 import pytest
+from django.conf.urls import url
 from django.core.exceptions import ImproperlyConfigured
+from django.test import override_settings
 from django.utils.datastructures import MultiValueDict
 
 from rest_framework import serializers
@@ -85,6 +87,43 @@ class TestProxiedPrimaryKeyRelatedField(APISimpleTestCase):
     def test_pk_representation(self):
         representation = self.field.to_representation(self.instance)
         assert representation == self.instance.pk.int
+
+
+@override_settings(ROOT_URLCONF=[
+    url(r'^example/(?P<name>.+)/$', lambda: None, name='example'),
+])
+class TestHyperlinkedRelatedField(APISimpleTestCase):
+    def setUp(self):
+        self.queryset = MockQueryset([
+            MockObject(pk=1, name='foobar'),
+            MockObject(pk=2, name='baz qux'),
+        ])
+        self.field = serializers.HyperlinkedRelatedField(
+            view_name='example',
+            lookup_field='name',
+            lookup_url_kwarg='name',
+            queryset=self.queryset,
+        )
+        self.field.reverse = mock_reverse
+        self.field._context = {'request': True}
+
+    def test_representation_unsaved_object_with_non_nullable_pk(self):
+        representation = self.field.to_representation(MockObject(pk=''))
+        assert representation is None
+
+    def test_hyperlinked_related_lookup_exists(self):
+        instance = self.field.to_internal_value('http://example.org/example/foobar/')
+        assert instance is self.queryset.items[0]
+
+    def test_hyperlinked_related_lookup_url_encoded_exists(self):
+        instance = self.field.to_internal_value('http://example.org/example/baz%20qux/')
+        assert instance is self.queryset.items[1]
+
+    def test_hyperlinked_related_lookup_does_not_exist(self):
+        with pytest.raises(serializers.ValidationError) as excinfo:
+            self.field.to_internal_value('http://example.org/example/doesnotexist/')
+        msg = excinfo.value.detail[0]
+        assert msg == 'Invalid hyperlink - Object does not exist.'
 
 
 class TestHyperlinkedIdentityField(APISimpleTestCase):
@@ -176,6 +215,16 @@ class TestSlugRelatedField(APISimpleTestCase):
         representation = self.field.to_representation(self.instance)
         assert representation == self.instance.name
 
+    def test_overriding_get_queryset(self):
+        qs = self.queryset
+
+        class NoQuerySetSlugRelatedField(serializers.SlugRelatedField):
+            def get_queryset(self):
+                return qs
+
+        field = NoQuerySetSlugRelatedField(slug_field='name')
+        field.to_internal_value(self.instance.name)
+
 
 class TestManyRelatedField(APISimpleTestCase):
     def setUp(self):
@@ -206,3 +255,14 @@ class TestManyRelatedField(APISimpleTestCase):
 
         mvd = MultiValueDict({'baz': ['bar1', 'bar2']})
         assert empty == self.field.get_value(mvd)
+
+
+class TestHyperlink:
+    def setup(self):
+        self.default_hyperlink = serializers.Hyperlink('http://example.com', 'test')
+
+    def test_can_be_pickled(self):
+        import pickle
+        upkled = pickle.loads(pickle.dumps(self.default_hyperlink))
+        assert upkled == self.default_hyperlink
+        assert upkled.name == self.default_hyperlink.name

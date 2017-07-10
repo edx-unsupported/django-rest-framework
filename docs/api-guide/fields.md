@@ -49,15 +49,19 @@ Defaults to `False`
 
 ### `default`
 
-If set, this gives the default value that will be used for the field if no input value is supplied.  If not set the default behavior is to not populate the attribute at all.
+If set, this gives the default value that will be used for the field if no input value is supplied. If not set the default behaviour is to not populate the attribute at all.
+
+The `default` is not applied during partial update operations. In the partial update case only fields that are provided in the incoming data will have a validated value returned.
 
 May be set to a function or other callable, in which case the value will be evaluated each time it is used. When called, it will receive no arguments. If the callable has a `set_context` method, that will be called each time before getting the value with the field instance as only argument. This works the same way as for [validators](validators.md#using-set_context).
+
+When serializing the instance, default will be used if the the object attribute or dictionary key is not present in the instance.
 
 Note that setting a `default` value implies that the field is not required. Including both the `default` and `required` keyword arguments is invalid and will raise an error.
 
 ### `source`
 
-The name of the attribute that will be used to populate the field.  May be a method that only takes a `self` argument, such as `URLField('get_absolute_url')`, or may use dotted notation to traverse attributes, such as `EmailField(source='user.email')`.
+The name of the attribute that will be used to populate the field.  May be a method that only takes a `self` argument, such as `URLField(source='get_absolute_url')`, or may use dotted notation to traverse attributes, such as `EmailField(source='user.email')`.
 
 The value `source='*'` has a special meaning, and is used to indicate that the entire object should be passed through to the field.  This can be useful for creating nested representations, or for fields which require access to the complete object in order to determine the output representation.
 
@@ -81,13 +85,19 @@ A text string that may be used as a description of the field in HTML form fields
 
 ### `initial`
 
-A value that should be used for pre-populating the value of HTML form fields.
+A value that should be used for pre-populating the value of HTML form fields. You may pass a callable to it, just as
+you may do with any regular Django `Field`:
+
+    import datetime
+    from rest_framework import serializers
+    class ExampleSerializer(serializers.Serializer):
+        day = serializers.DateField(initial=datetime.date.today)
 
 ### `style`
 
-A dictionary of key-value pairs that can be used to control how renderers should render the field. The API for this should still be considered experimental, and will be formalized with the 3.1 release.
+A dictionary of key-value pairs that can be used to control how renderers should render the field.
 
-Two options are currently used in HTML form generation, `'input_type'` and `'base_template'`.
+Two examples here are `'input_type'` and `'base_template'`:
 
     # Use <input type="password"> for the input.
     password = serializers.CharField(
@@ -96,11 +106,11 @@ Two options are currently used in HTML form generation, `'input_type'` and `'bas
 
     # Use a radio input instead of a select input.
     color_channel = serializers.ChoiceField(
-        choices=['red', 'green', 'blue']
-        style = {'base_template': 'radio.html'}
-    }
+        choices=['red', 'green', 'blue'],
+        style={'base_template': 'radio.html'}
+    )
 
-**Note**: The `style` argument replaces the old-style version 2.x `widget` keyword argument. Because REST framework 3 now uses templated HTML form generation, the `widget` option that was used to support Django built-in widgets can no longer be supported. Version 3.3 is planned to include public API support for customizing HTML form generation.
+For more details see the [HTML & Forms][html-and-forms] documentation.
 
 ---
 
@@ -253,11 +263,12 @@ Corresponds to `django.db.models.fields.DecimalField`.
 
 **Signature**: `DecimalField(max_digits, decimal_places, coerce_to_string=None, max_value=None, min_value=None)`
 
-- `max_digits` The maximum number of digits allowed in the number. Note that this number must be greater than or equal to decimal_places.
+- `max_digits` The maximum number of digits allowed in the number. It must be either `None` or an integer greater than or equal to `decimal_places`.
 - `decimal_places` The number of decimal places to store with the number.
-- `coerce_to_string` Set to `True` if string values should be returned for the representation, or `False` if `Decimal` objects should be returned. Defaults to the same value as the `COERCE_DECIMAL_TO_STRING` settings key, which will be `True` unless overridden. If `Decimal` objects are returned by the serializer, then the final output format will be determined by the renderer.
+- `coerce_to_string` Set to `True` if string values should be returned for the representation, or `False` if `Decimal` objects should be returned. Defaults to the same value as the `COERCE_DECIMAL_TO_STRING` settings key, which will be `True` unless overridden. If `Decimal` objects are returned by the serializer, then the final output format will be determined by the renderer. Note that setting `localize` will force the value to `True`.
 - `max_value` Validate that the number provided is no greater than this value.
 - `min_value` Validate that the number provided is no less than this value.
+- `localize` Set to `True` to enable localization of input and output based on the current locale. This will also force `coerce_to_string` to `True`. Defaults to `False`. Note that data formatting is enabled if you have set `USE_L10N=True` in your settings file.
 
 #### Example usage
 
@@ -283,9 +294,9 @@ A date and time representation.
 
 Corresponds to `django.db.models.fields.DateTimeField`.
 
-**Signature:** `DateTimeField(format=None, input_formats=None)`
+**Signature:** `DateTimeField(format=api_settings.DATETIME_FORMAT, input_formats=None)`
 
-* `format` - A string representing the output format.  If not specified, this defaults to the same value as the `DATETIME_FORMAT` settings key, which will be `'iso-8601'` unless set. Setting to a format string indicates that `to_representation` return values should be coerced to string output. Format strings are described below. Setting this value to `None` indicates that Python `datetime` objects should be returned by `to_representation`. In this case the datetime encoding will be determined by the renderer.
+* `format` - A string representing the output format. If not specified, this defaults to the same value as the `DATETIME_FORMAT` settings key, which will be `'iso-8601'` unless set. Setting to a format string indicates that `to_representation` return values should be coerced to string output. Format strings are described below. Setting this value to `None` indicates that Python `datetime` objects should be returned by `to_representation`. In this case the datetime encoding will be determined by the renderer.
 * `input_formats` - A list of strings representing the input formats which may be used to parse the date.  If not specified, the `DATETIME_INPUT_FORMATS` setting will be used, which defaults to `['iso-8601']`.
 
 #### `DateTimeField` format strings.
@@ -293,8 +304,6 @@ Corresponds to `django.db.models.fields.DateTimeField`.
 Format strings may either be [Python strftime formats][strftime] which explicitly specify the format, or the special string `'iso-8601'`, which indicates that [ISO 8601][iso8601] style datetimes should be used. (eg `'2013-01-29T12:34:56.000000Z'`)
 
 When a value of `None` is used for the format `datetime` objects will be returned by `to_representation` and the final output representation will determined by the renderer class.
-
-In the case of JSON this means the default datetime representation uses the [ECMA 262 date time string specification][ecma262].  This is a subset of ISO 8601 which uses millisecond precision, and includes the 'Z' suffix for the UTC timezone, for example: `2013-01-29T12:34:56.123Z`.
 
 #### `auto_now` and `auto_now_add` model fields.
 
@@ -314,7 +323,7 @@ A date representation.
 
 Corresponds to `django.db.models.fields.DateField`
 
-**Signature:** `DateField(format=None, input_formats=None)`
+**Signature:** `DateField(format=api_settings.DATE_FORMAT, input_formats=None)`
 
 * `format` - A string representing the output format.  If not specified, this defaults to the same value as the `DATE_FORMAT` settings key, which will be `'iso-8601'` unless set. Setting to a format string indicates that `to_representation` return values should be coerced to string output. Format strings are described below. Setting this value to `None` indicates that Python `date` objects should be returned by `to_representation`. In this case the date encoding will be determined by the renderer.
 * `input_formats` - A list of strings representing the input formats which may be used to parse the date.  If not specified, the `DATE_INPUT_FORMATS` setting will be used, which defaults to `['iso-8601']`.
@@ -329,7 +338,7 @@ A time representation.
 
 Corresponds to `django.db.models.fields.TimeField`
 
-**Signature:** `TimeField(format=None, input_formats=None)`
+**Signature:** `TimeField(format=api_settings.TIME_FORMAT, input_formats=None)`
 
 * `format` - A string representing the output format.  If not specified, this defaults to the same value as the `TIME_FORMAT` settings key, which will be `'iso-8601'` unless set. Setting to a format string indicates that `to_representation` return values should be coerced to string output. Format strings are described below. Setting this value to `None` indicates that Python `time` objects should be returned by `to_representation`. In this case the time encoding will be determined by the renderer.
 * `input_formats` - A list of strings representing the input formats which may be used to parse the date.  If not specified, the `TIME_INPUT_FORMATS` setting will be used, which defaults to `['iso-8601']`.
@@ -425,9 +434,11 @@ Requires either the `Pillow` package or `PIL` package.  The `Pillow` package is 
 
 A field class that validates a list of objects.
 
-**Signature**: `ListField(child)`
+**Signature**: `ListField(child, min_length=None, max_length=None)`
 
 - `child` - A field instance that should be used for validating the objects in the list. If this argument is not provided then objects in the list will not be validated.
+- `min_length` - Validates that the list contains no fewer than this number of elements.
+- `max_length` - Validates that the list contains no more than this number of elements.
 
 For example, to validate a list of integers you might use something like the following:
 
@@ -459,6 +470,14 @@ You can also use the declarative style, as with `ListField`. For example:
     class DocumentField(DictField):
         child = CharField()
 
+## JSONField
+
+A field class that validates that the incoming data structure consists of valid JSON primitives. In its alternate binary mode, it will represent and validate JSON-encoded binary strings.
+
+**Signature**: `JSONField(binary)`
+
+- `binary` - If set to `True` then the field will output and validate a JSON encoded string, rather than a primitive data structure. Defaults to `False`.
+
 ---
 
 # Miscellaneous fields
@@ -471,7 +490,7 @@ This field is used by default with `ModelSerializer` when including field names 
 
 **Signature**: `ReadOnlyField()`
 
-For example, is `has_expired` was a property on the `Account` model, then the following serializer would automatically generate it as a `ReadOnlyField`:
+For example, if `has_expired` was a property on the `Account` model, then the following serializer would automatically generate it as a `ReadOnlyField`:
 
     class AccountSerializer(serializers.ModelSerializer):
         class Meta:
@@ -564,7 +583,7 @@ Let's look at an example of serializing a class that represents an RGB color val
 
 By default field values are treated as mapping to an attribute on the object.  If you need to customize how the field value is accessed and set you need to override `.get_attribute()` and/or `.get_value()`.
 
-As an example, let's create a field that can be used represent the class name of the object being serialized:
+As an example, let's create a field that can be used to represent the class name of the object being serialized:
 
     class ClassNameField(serializers.Field):
         def get_attribute(self, obj):
@@ -609,7 +628,6 @@ The `.fail()` method is a shortcut for raising `ValidationError` that takes a me
 
     def to_internal_value(self, data):
         if not isinstance(data, six.text_type):
-            msg = 'Incorrect type. Expected a string, but got %s'
             self.fail('incorrect_type', input_type=type(data).__name__)
 
         if not re.match(r'^rgb\([0-9]+,[0-9]+,[0-9]+\)$', data):
@@ -649,13 +667,14 @@ The [django-rest-framework-gis][django-rest-framework-gis] package provides geog
 
 The [django-rest-framework-hstore][django-rest-framework-hstore] package provides an `HStoreField` to support [django-hstore][django-hstore] `DictionaryField` model field.
 
-[cite]: https://docs.djangoproject.com/en/dev/ref/forms/api/#django.forms.Form.cleaned_data
-[FILE_UPLOAD_HANDLERS]: https://docs.djangoproject.com/en/dev/ref/settings/#std:setting-FILE_UPLOAD_HANDLERS
+[cite]: https://docs.djangoproject.com/en/stable/ref/forms/api/#django.forms.Form.cleaned_data
+[html-and-forms]: ../topics/html-and-forms.md
+[FILE_UPLOAD_HANDLERS]: https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-FILE_UPLOAD_HANDLERS
 [ecma262]: http://ecma-international.org/ecma-262/5.1/#sec-15.9.1.15
-[strftime]: http://docs.python.org/2/library/datetime.html#strftime-and-strptime-behavior
-[django-widgets]: https://docs.djangoproject.com/en/dev/ref/forms/widgets/
+[strftime]: https://docs.python.org/3/library/datetime.html#strftime-and-strptime-behavior
+[django-widgets]: https://docs.djangoproject.com/en/stable/ref/forms/widgets/
 [iso8601]: http://www.w3.org/TR/NOTE-datetime
-[drf-compound-fields]: http://drf-compound-fields.readthedocs.org
+[drf-compound-fields]: https://drf-compound-fields.readthedocs.io
 [drf-extra-fields]: https://github.com/Hipo/drf-extra-fields
 [djangorestframework-recursive]: https://github.com/heywbj/django-rest-framework-recursive
 [django-rest-framework-gis]: https://github.com/djangonauts/django-rest-framework-gis

@@ -1,15 +1,17 @@
 from __future__ import unicode_literals
 
 import collections
+import json
+from collections import OrderedDict
 
 from django.utils.encoding import force_text
 
-from rest_framework.compat import OrderedDict, unicode_to_repr
+from rest_framework.compat import unicode_to_repr
 
 
 class ReturnDict(OrderedDict):
     """
-    Return object from `serialier.data` for the `Serializer` class.
+    Return object from `serializer.data` for the `Serializer` class.
     Includes a backlink to the serializer instance for renderers
     to use if they need richer field information.
     """
@@ -32,7 +34,7 @@ class ReturnDict(OrderedDict):
 
 class ReturnList(list):
     """
-    Return object from `serialier.data` for the `SerializerList` class.
+    Return object from `serializer.data` for the `SerializerList` class.
     Includes a backlink to the serializer instance for renderers
     to use if they need richer field information.
     """
@@ -77,7 +79,17 @@ class BoundField(object):
         ))
 
     def as_form_field(self):
-        value = '' if (self.value is None or self.value is False) else force_text(self.value)
+        value = '' if (self.value is None or self.value is False) else self.value
+        return self.__class__(self._field, value, self.errors, self._prefix)
+
+
+class JSONBoundField(BoundField):
+    def as_form_field(self):
+        value = self.value
+        try:
+            value = json.dumps(self.value, sort_keys=True, indent=4)
+        except TypeError:
+            pass
         return self.__class__(self._field, value, self.errors, self._prefix)
 
 
@@ -89,7 +101,7 @@ class NestedBoundField(BoundField):
     """
 
     def __init__(self, field, value, errors, prefix=''):
-        if value is None:
+        if value is None or value is '':
             value = {}
         super(NestedBoundField, self).__init__(field, value, errors, prefix)
 
@@ -100,7 +112,7 @@ class NestedBoundField(BoundField):
     def __getitem__(self, key):
         field = self.fields[key]
         value = self.value.get(key) if self.value else None
-        error = self.errors.get(key) if self.errors else None
+        error = self.errors.get(key) if isinstance(self.errors, dict) else None
         if hasattr(field, 'fields'):
             return NestedBoundField(field, value, error, prefix=self.name + '.')
         return BoundField(field, value, error, prefix=self.name + '.')
@@ -111,7 +123,7 @@ class NestedBoundField(BoundField):
             if isinstance(value, (list, dict)):
                 values[key] = value
             else:
-                values[key] = '' if value is None else force_text(value)
+                values[key] = '' if (value is None or value is False) else force_text(value)
         return self.__class__(self._field, values, self.errors, self._prefix)
 
 

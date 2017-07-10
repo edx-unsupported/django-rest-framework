@@ -3,27 +3,20 @@ Tests for content parsing, and form-overloaded content parsing.
 """
 from __future__ import unicode_literals
 
-import json
-from io import BytesIO
-
-import django
-import pytest
 from django.conf.urls import url
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.models import User
 from django.contrib.sessions.middleware import SessionMiddleware
-from django.core.handlers.wsgi import WSGIRequest
-from django.test import TestCase
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 from django.utils import six
 
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
-from rest_framework.parsers import (
-    BaseParser, FormParser, JSONParser, MultiPartParser
-)
-from rest_framework.request import Empty, Request
+from rest_framework.compat import is_anonymous
+from rest_framework.parsers import BaseParser, FormParser, MultiPartParser
+from rest_framework.request import Request
 from rest_framework.response import Response
-from rest_framework.settings import api_settings
 from rest_framework.test import APIClient, APIRequestFactory
 from rest_framework.views import APIView
 
@@ -43,50 +36,20 @@ class PlainTextParser(BaseParser):
         return stream.read()
 
 
-class TestMethodOverloading(TestCase):
-    def test_method(self):
-        """
-        Request methods should be same as underlying request.
-        """
-        request = Request(factory.get('/'))
-        self.assertEqual(request.method, 'GET')
-        request = Request(factory.post('/'))
-        self.assertEqual(request.method, 'POST')
-
-    def test_overloaded_method(self):
-        """
-        POST requests can be overloaded to another method by setting a
-        reserved form field
-        """
-        request = Request(factory.post('/', {api_settings.FORM_METHOD_OVERRIDE: 'DELETE'}))
-        self.assertEqual(request.method, 'DELETE')
-
-    def test_x_http_method_override_header(self):
-        """
-        POST requests can also be overloaded to another method by setting
-        the X-HTTP-Method-Override header.
-        """
-        request = Request(factory.post('/', {'foo': 'bar'}, HTTP_X_HTTP_METHOD_OVERRIDE='DELETE'))
-        self.assertEqual(request.method, 'DELETE')
-
-        request = Request(factory.get('/', {'foo': 'bar'}, HTTP_X_HTTP_METHOD_OVERRIDE='DELETE'))
-        self.assertEqual(request.method, 'DELETE')
-
-
 class TestContentParsing(TestCase):
     def test_standard_behaviour_determines_no_content_GET(self):
         """
         Ensure request.data returns empty QueryDict for GET request.
         """
         request = Request(factory.get('/'))
-        self.assertEqual(request.data, {})
+        assert request.data == {}
 
     def test_standard_behaviour_determines_no_content_HEAD(self):
         """
         Ensure request.data returns empty QueryDict for HEAD request.
         """
         request = Request(factory.head('/'))
-        self.assertEqual(request.data, {})
+        assert request.data == {}
 
     def test_request_DATA_with_form_content(self):
         """
@@ -95,7 +58,7 @@ class TestContentParsing(TestCase):
         data = {'qwerty': 'uiop'}
         request = Request(factory.post('/', data))
         request.parsers = (FormParser(), MultiPartParser())
-        self.assertEqual(list(request.data.items()), list(data.items()))
+        assert list(request.data.items()) == list(data.items())
 
     def test_request_DATA_with_text_content(self):
         """
@@ -106,7 +69,7 @@ class TestContentParsing(TestCase):
         content_type = 'text/plain'
         request = Request(factory.post('/', content, content_type=content_type))
         request.parsers = (PlainTextParser(),)
-        self.assertEqual(request.data, content)
+        assert request.data == content
 
     def test_request_POST_with_form_content(self):
         """
@@ -115,7 +78,17 @@ class TestContentParsing(TestCase):
         data = {'qwerty': 'uiop'}
         request = Request(factory.post('/', data))
         request.parsers = (FormParser(), MultiPartParser())
-        self.assertEqual(list(request.POST.items()), list(data.items()))
+        assert list(request.POST.items()) == list(data.items())
+
+    def test_request_POST_with_files(self):
+        """
+        Ensure request.POST returns no content for POST request with file content.
+        """
+        upload = SimpleUploadedFile("file.txt", b"file_content")
+        request = Request(factory.post('/', {'upload': upload}))
+        request.parsers = (FormParser(), MultiPartParser())
+        assert list(request.POST.keys()) == []
+        assert list(request.FILES.keys()) == ['upload']
 
     def test_standard_behaviour_determines_form_content_PUT(self):
         """
@@ -124,7 +97,7 @@ class TestContentParsing(TestCase):
         data = {'qwerty': 'uiop'}
         request = Request(factory.put('/', data))
         request.parsers = (FormParser(), MultiPartParser())
-        self.assertEqual(list(request.data.items()), list(data.items()))
+        assert list(request.data.items()) == list(data.items())
 
     def test_standard_behaviour_determines_non_form_content_PUT(self):
         """
@@ -135,50 +108,7 @@ class TestContentParsing(TestCase):
         content_type = 'text/plain'
         request = Request(factory.put('/', content, content_type=content_type))
         request.parsers = (PlainTextParser(), )
-        self.assertEqual(request.data, content)
-
-    def test_overloaded_behaviour_allows_content_tunnelling(self):
-        """
-        Ensure request.data returns content for overloaded POST request.
-        """
-        json_data = {'foobar': 'qwerty'}
-        content = json.dumps(json_data)
-        content_type = 'application/json'
-        form_data = {
-            api_settings.FORM_CONTENT_OVERRIDE: content,
-            api_settings.FORM_CONTENTTYPE_OVERRIDE: content_type
-        }
-        request = Request(factory.post('/', form_data))
-        request.parsers = (JSONParser(), )
-        self.assertEqual(request.data, json_data)
-
-    def test_form_POST_unicode(self):
-        """
-        JSON POST via default web interface with unicode data
-        """
-        # Note: environ and other variables here have simplified content compared to real Request
-        CONTENT = b'_content_type=application%2Fjson&_content=%7B%22request%22%3A+4%2C+%22firm%22%3A+1%2C+%22text%22%3A+%22%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82%21%22%7D'
-        environ = {
-            'REQUEST_METHOD': 'POST',
-            'CONTENT_TYPE': 'application/x-www-form-urlencoded',
-            'CONTENT_LENGTH': len(CONTENT),
-            'wsgi.input': BytesIO(CONTENT),
-        }
-        wsgi_request = WSGIRequest(environ=environ)
-        wsgi_request._load_post_and_files()
-        parsers = (JSONParser(), FormParser(), MultiPartParser())
-        parser_context = {
-            'encoding': 'utf-8',
-            'kwargs': {},
-            'args': (),
-        }
-        request = Request(wsgi_request, parsers=parsers, parser_context=parser_context)
-        method = request.method
-        self.assertEqual(method, 'POST')
-        self.assertEqual(request._content_type, 'application/json')
-        self.assertEqual(request._stream.getvalue(), b'{"request": 4, "firm": 1, "text": "\xd0\x9f\xd1\x80\xd0\xb8\xd0\xb2\xd0\xb5\xd1\x82!"}')
-        self.assertEqual(request._data, Empty)
-        self.assertEqual(request._files, Empty)
+        assert request.data == content
 
 
 class MockView(APIView):
@@ -195,9 +125,8 @@ urlpatterns = [
 ]
 
 
+@override_settings(ROOT_URLCONF='tests.test_request')
 class TestContentParsingWithAuthentication(TestCase):
-    urls = 'tests.test_request'
-
     def setUp(self):
         self.csrf_client = APIClient(enforce_csrf_checks=True)
         self.username = 'john'
@@ -213,10 +142,10 @@ class TestContentParsingWithAuthentication(TestCase):
         content = {'example': 'example'}
 
         response = self.client.post('/', content)
-        self.assertEqual(status.HTTP_200_OK, response.status_code)
+        assert status.HTTP_200_OK == response.status_code
 
         response = self.csrf_client.post('/', content)
-        self.assertEqual(status.HTTP_200_OK, response.status_code)
+        assert status.HTTP_200_OK == response.status_code
 
 
 class TestUserSetter(TestCase):
@@ -233,21 +162,21 @@ class TestUserSetter(TestCase):
 
     def test_user_can_be_set(self):
         self.request.user = self.user
-        self.assertEqual(self.request.user, self.user)
+        assert self.request.user == self.user
 
     def test_user_can_login(self):
         login(self.request, self.user)
-        self.assertEqual(self.request.user, self.user)
+        assert self.request.user == self.user
 
     def test_user_can_logout(self):
         self.request.user = self.user
-        self.assertFalse(self.request.user.is_anonymous())
+        self.assertFalse(is_anonymous(self.request.user))
         logout(self.request)
-        self.assertTrue(self.request.user.is_anonymous())
+        self.assertTrue(is_anonymous(self.request.user))
 
     def test_logged_in_user_is_set_on_wrapped_request(self):
         login(self.request, self.user)
-        self.assertEqual(self.wrapped_request.user, self.user)
+        assert self.wrapped_request.user == self.user
 
     def test_calling_user_fails_when_attribute_error_is_raised(self):
         """
@@ -266,7 +195,10 @@ class TestUserSetter(TestCase):
         try:
             self.request.user
         except AttributeError as error:
-            self.assertEqual(str(error), "'module' object has no attribute 'MISSPELLED_NAME_THAT_DOESNT_EXIST'")
+            assert str(error) in (
+                "'module' object has no attribute 'MISSPELLED_NAME_THAT_DOESNT_EXIST'",  # Python < 3.5
+                "module 'rest_framework' has no attribute 'MISSPELLED_NAME_THAT_DOESNT_EXIST'",  # Python >= 3.5
+            )
         else:
             assert False, 'AttributeError not raised'
 
@@ -275,17 +207,15 @@ class TestAuthSetter(TestCase):
     def test_auth_can_be_set(self):
         request = Request(factory.get('/'))
         request.auth = 'DUMMY'
-        self.assertEqual(request.auth, 'DUMMY')
+        assert request.auth == 'DUMMY'
 
 
-@pytest.mark.skipif(django.VERSION < (1, 7),
-                    reason='secure argument is only available for django1.7+')
 class TestSecure(TestCase):
 
     def test_default_secure_false(self):
         request = Request(factory.get('/', secure=False))
-        self.assertEqual(request.scheme, 'http')
+        assert request.scheme == 'http'
 
     def test_default_secure_true(self):
         request = Request(factory.get('/', secure=True))
-        self.assertEqual(request.scheme, 'https')
+        assert request.scheme == 'https'

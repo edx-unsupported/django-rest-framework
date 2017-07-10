@@ -413,3 +413,12 @@ ul.sponsor {
 #mkdocs_search_modal article p{
   word-wrap: break-word;
 }
+
+.toclink {
+  color: #333;
+}
+
+.book-cover img {
+  margin: 0 !important;
+  display: inline-block !important;
+}

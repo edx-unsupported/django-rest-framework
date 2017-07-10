@@ -1,11 +1,12 @@
 from __future__ import unicode_literals
 
-from django.conf.urls import patterns, url
+import unittest
+
+from django.conf.urls import url
 from django.db import connection, connections, transaction
 from django.http import Http404
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils.decorators import method_decorator
-from django.utils.unittest import skipUnless
 
 from rest_framework import status
 from rest_framework.exceptions import APIException
@@ -35,8 +36,24 @@ class APIExceptionView(APIView):
         raise APIException
 
 
-@skipUnless(connection.features.uses_savepoints,
-            "'atomic' requires transactions and savepoints.")
+class NonAtomicAPIExceptionView(APIView):
+    @method_decorator(transaction.non_atomic_requests)
+    def dispatch(self, *args, **kwargs):
+        return super(NonAtomicAPIExceptionView, self).dispatch(*args, **kwargs)
+
+    def get(self, request, *args, **kwargs):
+        BasicModel.objects.all()
+        raise Http404
+
+urlpatterns = (
+    url(r'^$', NonAtomicAPIExceptionView.as_view()),
+)
+
+
+@unittest.skipUnless(
+    connection.features.uses_savepoints,
+    "'atomic' requires transactions and savepoints."
+)
 class DBTransactionTests(TestCase):
     def setUp(self):
         self.view = BasicView.as_view()
@@ -50,13 +67,15 @@ class DBTransactionTests(TestCase):
 
         with self.assertNumQueries(1):
             response = self.view(request)
-        self.assertFalse(transaction.get_rollback())
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        assert not transaction.get_rollback()
+        assert response.status_code == status.HTTP_200_OK
         assert BasicModel.objects.count() == 1
 
 
-@skipUnless(connection.features.uses_savepoints,
-            "'atomic' requires transactions and savepoints.")
+@unittest.skipUnless(
+    connection.features.uses_savepoints,
+    "'atomic' requires transactions and savepoints."
+)
 class DBTransactionErrorTests(TestCase):
     def setUp(self):
         self.view = ErrorView.as_view()
@@ -79,12 +98,14 @@ class DBTransactionErrorTests(TestCase):
             # 3 - release savepoint
             with transaction.atomic():
                 self.assertRaises(Exception, self.view, request)
-                self.assertFalse(transaction.get_rollback())
+                assert not transaction.get_rollback()
         assert BasicModel.objects.count() == 1
 
 
-@skipUnless(connection.features.uses_savepoints,
-            "'atomic' requires transactions and savepoints.")
+@unittest.skipUnless(
+    connection.features.uses_savepoints,
+    "'atomic' requires transactions and savepoints."
+)
 class DBTransactionAPIExceptionTests(TestCase):
     def setUp(self):
         self.view = APIExceptionView.as_view()
@@ -107,31 +128,17 @@ class DBTransactionAPIExceptionTests(TestCase):
             # 4 - release savepoint (django>=1.8 only)
             with transaction.atomic():
                 response = self.view(request)
-                self.assertTrue(transaction.get_rollback())
-        self.assertEqual(response.status_code,
-                         status.HTTP_500_INTERNAL_SERVER_ERROR)
+                assert transaction.get_rollback()
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert BasicModel.objects.count() == 0
 
 
-@skipUnless(connection.features.uses_savepoints,
-            "'atomic' requires transactions and savepoints.")
+@unittest.skipUnless(
+    connection.features.uses_savepoints,
+    "'atomic' requires transactions and savepoints."
+)
+@override_settings(ROOT_URLCONF='tests.test_atomic_requests')
 class NonAtomicDBTransactionAPIExceptionTests(TransactionTestCase):
-    @property
-    def urls(self):
-        class NonAtomicAPIExceptionView(APIView):
-            @method_decorator(transaction.non_atomic_requests)
-            def dispatch(self, *args, **kwargs):
-                return super(NonAtomicAPIExceptionView, self).dispatch(*args, **kwargs)
-
-            def get(self, request, *args, **kwargs):
-                BasicModel.objects.all()
-                raise Http404
-
-        return patterns(
-            '',
-            url(r'^$', NonAtomicAPIExceptionView.as_view())
-        )
-
     def setUp(self):
         connections.databases['default']['ATOMIC_REQUESTS'] = True
 
@@ -143,5 +150,4 @@ class NonAtomicDBTransactionAPIExceptionTests(TransactionTestCase):
 
         # without checking connection.in_atomic_block view raises 500
         # due attempt to rollback without transaction
-        self.assertEqual(response.status_code,
-                         status.HTTP_404_NOT_FOUND)
+        assert response.status_code == status.HTTP_404_NOT_FOUND

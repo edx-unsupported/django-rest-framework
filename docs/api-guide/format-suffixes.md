@@ -42,7 +42,7 @@ When using `format_suffix_patterns`, you must make sure to add the `'format'` ke
     def comment_list(request, format=None):
         # do stuff...
 
-Or with class based views:
+Or with class-based views:
 
     class CommentList(APIView):
         def get(self, request, format=None):
@@ -66,6 +66,16 @@ If using the `i18n_patterns` function provided by Django, as well as `format_suf
     urlpatterns = i18n_patterns(
         format_suffix_patterns(urlpatterns, allowed=['json', 'html'])
     )
+
+---
+
+## Query parameter formats
+
+An alternative to the format suffixes is to include the requested format in a query parameter. REST framework provides this option by default, and it is used in the browsable API to switch between differing available representations.
+
+To select a representation using its short format, use the `format` query parameter. For example: `http://example.com/organizations/?format=csv`.
+
+The name of this query parameter can be modified using the `URL_FORMAT_OVERRIDE` setting. Set the value to `None` to disable this behavior.
 
 ---
 

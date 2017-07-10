@@ -8,7 +8,7 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from rest_framework.settings import api_settings
+from rest_framework.settings import APISettings, api_settings
 from rest_framework.test import APIRequestFactory
 from rest_framework.views import APIView
 
@@ -45,6 +45,19 @@ class ErrorView(APIView):
         raise Exception
 
 
+def custom_handler(exc, context):
+    if isinstance(exc, SyntaxError):
+        return Response({'error': 'SyntaxError'}, status=400)
+    return Response({'error': 'UnknownError'}, status=500)
+
+
+class OverridenSettingsView(APIView):
+    settings = APISettings({'EXCEPTION_HANDLER': custom_handler})
+
+    def get(self, request, *args, **kwargs):
+        raise SyntaxError('request is invalid syntax')
+
+
 @api_view(['GET'])
 def error_view(request):
     raise Exception
@@ -71,23 +84,8 @@ class ClassBasedViewIntegrationTests(TestCase):
         expected = {
             'detail': JSON_ERROR
         }
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(sanitise_json_error(response.data), expected)
-
-    def test_400_parse_error_tunneled_content(self):
-        content = 'f00bar'
-        content_type = 'application/json'
-        form_data = {
-            api_settings.FORM_CONTENT_OVERRIDE: content,
-            api_settings.FORM_CONTENTTYPE_OVERRIDE: content_type
-        }
-        request = factory.post('/', form_data)
-        response = self.view(request)
-        expected = {
-            'detail': JSON_ERROR
-        }
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(sanitise_json_error(response.data), expected)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert sanitise_json_error(response.data) == expected
 
 
 class FunctionBasedViewIntegrationTests(TestCase):
@@ -100,23 +98,8 @@ class FunctionBasedViewIntegrationTests(TestCase):
         expected = {
             'detail': JSON_ERROR
         }
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(sanitise_json_error(response.data), expected)
-
-    def test_400_parse_error_tunneled_content(self):
-        content = 'f00bar'
-        content_type = 'application/json'
-        form_data = {
-            api_settings.FORM_CONTENT_OVERRIDE: content,
-            api_settings.FORM_CONTENTTYPE_OVERRIDE: content_type
-        }
-        request = factory.post('/', form_data)
-        response = self.view(request)
-        expected = {
-            'detail': JSON_ERROR
-        }
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(sanitise_json_error(response.data), expected)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert sanitise_json_error(response.data) == expected
 
 
 class TestCustomExceptionHandler(TestCase):
@@ -137,8 +120,8 @@ class TestCustomExceptionHandler(TestCase):
         request = factory.get('/', content_type='application/json')
         response = view(request)
         expected = 'Error!'
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data, expected)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data == expected
 
     def test_function_based_view_exception_handler(self):
         view = error_view
@@ -146,5 +129,16 @@ class TestCustomExceptionHandler(TestCase):
         request = factory.get('/', content_type='application/json')
         response = view(request)
         expected = 'Error!'
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data, expected)
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.data == expected
+
+
+class TestCustomSettings(TestCase):
+    def setUp(self):
+        self.view = OverridenSettingsView.as_view()
+
+    def test_get_exception_handler(self):
+        request = factory.get('/', content_type='application/json')
+        response = self.view(request)
+        assert response.status_code == 400
+        assert response.data == {'error': 'SyntaxError'}

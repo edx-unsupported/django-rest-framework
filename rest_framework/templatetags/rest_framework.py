@@ -1,15 +1,18 @@
 from __future__ import absolute_import, unicode_literals
 
 import re
+from collections import OrderedDict
 
 from django import template
-from django.core.urlresolvers import NoReverseMatch, reverse
-from django.template import Context, loader
+from django.template import loader
 from django.utils import six
 from django.utils.encoding import force_text, iri_to_uri
-from django.utils.html import escape, smart_urlquote
+from django.utils.html import escape, format_html, smart_urlquote
 from django.utils.safestring import SafeData, mark_safe
 
+from rest_framework.compat import (
+    NoReverseMatch, markdown, pygments_highlight, reverse, template_render
+)
 from rest_framework.renderers import HTMLFormRenderer
 from rest_framework.utils.urls import replace_query_param
 
@@ -19,14 +22,71 @@ register = template.Library()
 class_re = re.compile(r'(?<=class=["\'])(.*)(?=["\'])')
 
 
+@register.tag(name='code')
+def highlight_code(parser, token):
+    code = token.split_contents()[-1]
+    nodelist = parser.parse(('endcode',))
+    parser.delete_first_token()
+    return CodeNode(code, nodelist)
+
+
+class CodeNode(template.Node):
+    style = 'emacs'
+
+    def __init__(self, lang, code):
+        self.lang = lang
+        self.nodelist = code
+
+    def render(self, context):
+        text = self.nodelist.render(context)
+        return pygments_highlight(text, self.lang, self.style)
+
+
+@register.filter()
+def with_location(fields, location):
+    return [
+        field for field in fields
+        if field.location == location
+    ]
+
+
+@register.simple_tag
+def form_for_link(link):
+    import coreschema
+    properties = OrderedDict([
+        (field.name, field.schema or coreschema.String())
+        for field in link.fields
+    ])
+    required = [
+        field.name
+        for field in link.fields
+        if field.required
+    ]
+    schema = coreschema.Object(properties=properties, required=required)
+    return mark_safe(coreschema.render_to_form(schema))
+
+
+@register.simple_tag
+def render_markdown(markdown_text):
+    if not markdown:
+        return markdown_text
+    return mark_safe(markdown.markdown(markdown_text))
+
+
 @register.simple_tag
 def get_pagination_html(pager):
     return pager.to_html()
 
 
 @register.simple_tag
-def render_field(field, style=None):
-    style = style or {}
+def render_form(serializer, template_pack=None):
+    style = {'template_pack': template_pack} if template_pack else {}
+    renderer = HTMLFormRenderer()
+    return renderer.render(serializer.data, None, {'style': style})
+
+
+@register.simple_tag
+def render_field(field, style):
     renderer = style.get('renderer', HTMLFormRenderer())
     return renderer.render_field(field, style)
 
@@ -41,8 +101,26 @@ def optional_login(request):
     except NoReverseMatch:
         return ''
 
-    snippet = "<li><a href='{href}?next={next}'>Log in</a></li>".format(href=login_url, next=escape(request.path))
-    return snippet
+    snippet = "<li><a href='{href}?next={next}'>Log in</a></li>"
+    snippet = format_html(snippet, href=login_url, next=escape(request.path))
+
+    return mark_safe(snippet)
+
+
+@register.simple_tag
+def optional_docs_login(request):
+    """
+    Include a login snippet if REST framework's login view is in the URLconf.
+    """
+    try:
+        login_url = reverse('rest_framework:login')
+    except NoReverseMatch:
+        return 'log in'
+
+    snippet = "<a href='{href}?next={next}'>log in</a>"
+    snippet = format_html(snippet, href=login_url, next=escape(request.path))
+
+    return mark_safe(snippet)
 
 
 @register.simple_tag
@@ -53,7 +131,8 @@ def optional_logout(request, user):
     try:
         logout_url = reverse('rest_framework:logout')
     except NoReverseMatch:
-        return '<li class="navbar-text">{user}</li>'.format(user=user)
+        snippet = format_html('<li class="navbar-text">{user}</li>', user=escape(user))
+        return mark_safe(snippet)
 
     snippet = """<li class="dropdown">
         <a href="#" class="dropdown-toggle" data-toggle="dropdown">
@@ -64,8 +143,9 @@ def optional_logout(request, user):
             <li><a href='{href}?next={next}'>Log out</a></li>
         </ul>
     </li>"""
+    snippet = format_html(snippet, user=escape(user), href=logout_url, next=escape(request.path))
 
-    return snippet.format(user=user, href=logout_url, next=escape(request.path))
+    return mark_safe(snippet)
 
 
 @register.simple_tag
@@ -76,6 +156,21 @@ def add_query_param(request, key, val):
     iri = request.get_full_path()
     uri = iri_to_uri(iri)
     return escape(replace_query_param(uri, key, val))
+
+
+@register.filter
+def as_string(value):
+    if value is None:
+        return ''
+    return '%s' % value
+
+
+@register.filter
+def as_list_of_strings(value):
+    return [
+        '' if (item is None) else ('%s' % item)
+        for item in value
+    ]
 
 
 @register.filter
@@ -110,7 +205,8 @@ def add_class(value, css_class):
 @register.filter
 def format_value(value):
     if getattr(value, 'is_hyperlink', False):
-        return mark_safe('<a href=%s>%s</a>' % (value, escape(value.name)))
+        name = six.text_type(value.obj)
+        return mark_safe('<a href=%s>%s</a>' % (value, escape(name)))
     if value is None or isinstance(value, bool):
         return mark_safe('<code>%s</code>' % {True: 'true', False: 'false', None: 'null'}[value])
     elif isinstance(value, list):
@@ -118,12 +214,12 @@ def format_value(value):
             template = loader.get_template('rest_framework/admin/list_value.html')
         else:
             template = loader.get_template('rest_framework/admin/simple_list_value.html')
-        context = Context({'value': value})
-        return template.render(context)
+        context = {'value': value}
+        return template_render(template, context)
     elif isinstance(value, dict):
         template = loader.get_template('rest_framework/admin/dict_value.html')
-        context = Context({'value': value})
-        return template.render(context)
+        context = {'value': value}
+        return template_render(template, context)
     elif isinstance(value, six.string_types):
         if (
             (value.startswith('http:') or value.startswith('https:')) and not
@@ -135,6 +231,17 @@ def format_value(value):
         elif '\n' in value:
             return mark_safe('<pre>%s</pre>' % escape(value))
     return six.text_type(value)
+
+
+@register.filter
+def items(value):
+    """
+    Simple filter to return the items of the dict. Useful when the dict may
+    have a key 'items' which is resolved first in Django tempalte dot-notation
+    lookup.  See issue #4931
+    Also see: https://stackoverflow.com/questions/15416662/django-template-loop-over-dictionary-items-with-items-as-key
+    """
+    return value.items()
 
 
 @register.filter
@@ -178,7 +285,7 @@ def urlize_quoted_links(text, trim_url_limit=None, nofollow=True, autoescape=Tru
     leading punctuation (opening parens) and it'll still do the right thing.
 
     If trim_url_limit is not None, the URLs in link text longer than this limit
-    will truncated to trim_url_limit-3 characters and appended with an elipsis.
+    will truncated to trim_url_limit-3 characters and appended with an ellipsis.
 
     If nofollow is True, the URLs in link text will get a rel="nofollow"
     attribute.
